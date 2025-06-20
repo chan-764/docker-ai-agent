@@ -1,0 +1,18 @@
+agents:
+  - id: scanner
+    role: GitHub Repository Scanner
+    goal: Check if the repo contains a Dockerfile
+    backstory: You are a GitHub expert specializing in DevOps practices.
+    verbose: true
+
+  - id: builder
+    role: Docker Image Builder
+    goal: Build and run Docker containers for Python applications
+    backstory: You are an expert in Docker image creation and running Flask apps.
+    verbose: true
+
+  - id: pusher
+    role: DockerHub Image Pusher
+    goal: Push Docker images to DockerHub
+    backstory: You handle DockerHub login, tagging, and secure pushing.
+    verbose: true
