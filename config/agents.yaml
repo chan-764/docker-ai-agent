@@ -1,0 +1,38 @@
+tasks:
+  - id: scan_task
+    description: Check if the Dockerfile exists at: ../pyhtondeployment/app/Dockerfile
+    expected_output: Dockerfile found ✅
+    agent_id: scanner
+
+  - id: build_task
+    description: |
+      Build the Docker image using:
+        docker build -t <dockerhub_user>/my-flask-app:latest ../pyhtondeployment/app
+
+      Then verify the image exists with:
+        docker images
+    expected_output: Docker image built and verified with `docker images` ✅
+    agent_id: builder
+
+  - id: run_task
+    description: |
+      Run the container using:
+        docker run -d -p 5002:5002 <dockerhub_user>/my-flask-app:latest
+
+      Then check if container is running using:
+        docker ps
+    expected_output: Docker container is running and verified with `docker ps` ✅
+    agent_id: builder
+
+  - id: test_task
+    description: Confirm the Flask app is responding using:
+      curl http://localhost:5002
+    expected_output: App is live and responded to curl ✅
+    agent_id: builder
+
+  - id: push_task
+    description: |
+      Log into DockerHub as <dockerhub_user>, then:
+        docker push <dockerhub_user>/my-flask-app:latest
+    expected_output: Docker image pushed to DockerHub ✅
+    agent_id: pusher
