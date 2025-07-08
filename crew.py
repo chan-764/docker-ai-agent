@@ -1,140 +1,118 @@
-from crewai import Agent, Task, Crew
 import os
 import subprocess
+import yaml
+from crewai import Agent, Task, Crew
+from datetime import datetime
 
+# === Logger ===
+def log(message, log_file):
+    timestamp = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
+    line = f"{timestamp} {message}"
+    print(line)
+    with open(log_file, "a") as f:
+        f.write(line + "\n")
 
-def clone_repo_if_needed(repository_url, local_path):
-    if not os.path.exists(local_path):
-        print(f"📥 Cloning repository: {repository_url}")
-        subprocess.run(["git", "clone", repository_url, local_path])
+# === Default Dockerfile Template ===
+DOCKERFILE_TEMPLATE = """# Auto-generated Dockerfile
+FROM python:3.9-slim
+WORKDIR /app
+COPY requirements.txt .  # Ensure this file exists
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+EXPOSE 5000
+CMD ["python", "app.py"]
+"""
+
+# === Global Variables ===
+dockerhub_user = os.getenv("DOCKERHUB_USERNAME")
+dockerhub_pass = os.getenv("DOCKERHUB_PASSWORD")
+repository_url = "https://github.com/chan-764/pyhtondeployment"
+local_repo_path = "./cloned_repo"
+log_file = "crew_output.log"
+services = ["api", "db", "app"]
+
+# === Agent Callback Functions ===
+
+def scan_for_dockerfiles(_):
+    if not os.path.exists(local_repo_path):
+        log(f"📥 Cloning repository: {repository_url}", log_file)
+        subprocess.run(["git", "clone", repository_url, local_repo_path], check=True)
     else:
-        print("✅ Repository already cloned.")
+        log("✅ Repository already cloned.", log_file)
 
+    for service in services:
+        dockerfile_path = os.path.join(local_repo_path, f"{service}/Dockerfile")
+        if not os.path.exists(dockerfile_path):
+            log(f"⚠️ Missing Dockerfile at: {dockerfile_path}", log_file)
+            os.makedirs(os.path.dirname(dockerfile_path), exist_ok=True)
+            with open(dockerfile_path, "w") as f:
+                f.write(DOCKERFILE_TEMPLATE)
+            log(f"✅ Auto-created Dockerfile for {service}", log_file)
+        else:
+            log(f"✅ Found Dockerfile: {dockerfile_path}", log_file)
 
-def docker_login(username, password):
-    print("🔐 Logging into DockerHub...")
-    try:
-        subprocess.run(
-            ["docker", "login", "-u", username, "--password-stdin"],
-            input=password.encode(),
-            check=True,
-            capture_output=True
-        )
-        print("✅ Docker login successful.")
-    except subprocess.CalledProcessError as e:
-        print("❌ Docker login failed:", e.stderr.decode())
-        raise
+def build_docker_images(_):
+    log("🔐 Logging into DockerHub...", log_file)
+    subprocess.run(
+        ["docker", "login", "-u", dockerhub_user, "--password-stdin"],
+        input=dockerhub_pass.encode(),
+        check=True
+    )
 
+    for service in services:
+        log(f"🔧 Building Docker image for {service}", log_file)
+        subprocess.run(["docker", "build", "-t", f"{dockerhub_user}/k8s-{service}", service], cwd=local_repo_path, check=True)
 
-def docker_build_run_push(image_name, dockerfile_path):
-    print("🐳 Building Docker image...")
-    subprocess.run(["docker", "build", "-t", image_name, dockerfile_path], check=True)
+def push_docker_images(_):
+    for service in services:
+        log(f"📤 Pushing image {dockerhub_user}/k8s-{service} to DockerHub", log_file)
+        subprocess.run(["docker", "push", f"{dockerhub_user}/k8s-{service}"], check=True)
 
-    print("🚀 Running Docker container...")
-    try:
-        subprocess.run(["docker", "run", "-d", "-p", "5002:5002", image_name], check=True)
-    except subprocess.CalledProcessError as e:
-        print("⚠️ Docker run failed:", e.stderr.decode())
-        print("⚠️ It’s likely that port 5002 is already in use.")
+def launch_with_docker_compose(_):
+    compose_content = {
+        "version": "3.8",
+        "services": {
+            service: {
+                "image": f"{dockerhub_user}/k8s-{service}",
+                "ports": [f"500{index + 1}:500{index + 1}"]
+            }
+            for index, service in enumerate(services)
+        }
+    }
 
-    print("📤 Pushing Docker image to DockerHub...")
-    subprocess.run(["docker", "push", image_name], check=True)
+    compose_file_path = os.path.join(local_repo_path, "docker-compose.yml")
+    with open(compose_file_path, "w") as f:
+        yaml.dump(compose_content, f)
+    log(f"📝 docker-compose.yml created at {compose_file_path}", log_file)
 
+    log("🚀 Launching services with docker-compose...", log_file)
+    subprocess.run(["docker-compose", "up", "-d"], cwd=local_repo_path, check=True)
+    log("✅ docker-compose services launched", log_file)
+
+# === Crew Setup ===
 
 def GitHubRepoScannerCrew():
-    github_token = os.getenv("GITHUB_TOKEN")
-    dockerhub_user = os.getenv("DOCKERHUB_USERNAME")
-    dockerhub_pass = os.getenv("DOCKERHUB_PASSWORD")
-    repository_url = "https://github.com/chan-764/pyhtondeployment"
-    local_repo_path = "../pyhtondeployment"
-    dockerfile_path = os.path.join(local_repo_path, "app")
-    image_name = f"{dockerhub_user}/my-flask-app:latest"
+    open(log_file, "w").close()  # Clear log file
 
-    # 1. Clone repo
-    clone_repo_if_needed(repository_url, local_repo_path)
+    # Define agents
+    scanner = Agent(role="Scanner", goal="Check for Dockerfiles", backstory="Scans repo for Dockerfiles", verbose=True)
+    builder = Agent(role="Builder", goal="Build Docker images", backstory="Builds all Docker containers", verbose=True)
+    pusher = Agent(role="Pusher", goal="Push Docker images to DockerHub", backstory="Handles pushing to registry", verbose=True)
+    composer = Agent(role="Composer", goal="Orchestrate services using Docker Compose", backstory="Launches containers", verbose=True)
 
-    # 2. Check Dockerfile
-    dockerfile_exists = os.path.exists(os.path.join(dockerfile_path, "Dockerfile"))
-    scan_result = "Dockerfile found ✅" if dockerfile_exists else "No Dockerfile found ❌"
-
-    # 3. Docker login
-    docker_login(dockerhub_user, dockerhub_pass)
-
-    # 4. Build, run, and push
-    docker_build_run_push(image_name, dockerfile_path)
-
-    # Agents
-    scanner = Agent(
-        role="GitHub Repository Scanner",
-        goal="Check if the repo contains a Dockerfile",
-        backstory="You are a GitHub expert specializing in DevOps practices.",
-        verbose=True
-    )
-
-    builder = Agent(
-        role="Docker Image Builder",
-        goal="Build and run Docker containers for Python applications",
-        backstory="You are an expert in Docker image creation and running Flask apps.",
-        verbose=True
-    )
-
-    pusher = Agent(
-        role="DockerHub Image Pusher",
-        goal="Push Docker images to DockerHub",
-        backstory="You handle DockerHub login, tagging, and secure pushing.",
-        verbose=True
-    )
-
-    # Tasks
-    scan_task = Task(
-        description=f"Check if the Dockerfile exists at: {dockerfile_path}/Dockerfile",
-        expected_output=scan_result,
-        agent=scanner
-    )
-
-    build_task = Task(
-        description=f"""Build the Docker image using:
-  docker build -t {image_name} {dockerfile_path}
-
-Then verify the image exists with:
-  docker images
-""",
-        expected_output="Docker image built and verified with `docker images` ✅",
-        agent=builder
-    )
-
-    run_task = Task(
-        description=f"""Run the container using:
-  docker run -d -p 5002:5002 {image_name}
-
-Then check if container is running using:
-  docker ps
-""",
-        expected_output="Docker container is running and verified with `docker ps` ✅",
-        agent=builder
-    )
-
-    test_task = Task(
-        description="Confirm the Flask app is responding using:\n  curl http://localhost:5002",
-        expected_output="App is live and responded to curl ✅",
-        agent=builder
-    )
-
-    push_task = Task(
-        description=f"""Log into DockerHub as {dockerhub_user}, then:
-  docker push {image_name}
-""",
-        expected_output="Docker image pushed to DockerHub ✅",
-        agent=pusher
-    )
+    # Define tasks with callbacks
+    scan_task = Task(description="Scan for Dockerfiles in the repo", expected_output="Dockerfiles verified", agent=scanner, callback=scan_for_dockerfiles)
+    build_task = Task(description="Build Docker images for API, DB, and App", expected_output="Docker images built", agent=builder, callback=build_docker_images)
+    push_task = Task(description="Push images to DockerHub", expected_output="Docker images pushed", agent=pusher, callback=push_docker_images)
+    compose_task = Task(description="Run docker-compose to launch all services", expected_output="Services running", agent=composer, callback=launch_with_docker_compose)
 
     return Crew(
-        agents=[scanner, builder, pusher],
-        tasks=[scan_task, build_task, run_task, test_task, push_task],
+        agents=[scanner, builder, pusher, composer],
+        tasks=[scan_task, build_task, push_task, compose_task],
         verbose=True
     )
 
-
+# === Entry Point ===
 if __name__ == "__main__":
     crew = GitHubRepoScannerCrew()
     crew.kickoff()
