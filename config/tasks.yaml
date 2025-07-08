@@ -1,18 +1,94 @@
-agents:
-  - id: scanner
-    role: GitHub Repository Scanner
-    goal: Check if the repo contains a Dockerfile
-    backstory: You are a GitHub expert specializing in DevOps practices.
-    verbose: true
+scan_task:
+  description: >
+    Scan the cloned repository for existing Dockerfiles in the following services: api, db, app.
+    If any Dockerfiles are missing, automatically create them using the standard template.
+    Ensure that each service directory has a proper Dockerfile before proceeding to the next stage.
+    
+    Steps to perform:
+    1. Check if repository is already cloned, if not clone it
+    2. Scan for Dockerfiles in api/, db/, and app/ directories
+    3. Create missing Dockerfiles using the standard Python template
+    4. Log all actions and results
+  
+  expected_output: >
+    A detailed report confirming that all services (api, db, app) have valid Dockerfiles.
+    The report should include:
+    - List of existing Dockerfiles found
+    - List of Dockerfiles that were auto-created
+    - Full paths to all Dockerfile locations
+    - Confirmation that repository is ready for the build phase
+  
+  agent: scanner
+  callback: scan_for_dockerfiles
 
-  - id: builder
-    role: Docker Image Builder
-    goal: Build and run Docker containers for Python applications
-    backstory: You are an expert in Docker image creation and running Flask apps.
-    verbose: true
+build_task:
+  description: >
+    Build Docker images for all three services (api, db, app) using their respective Dockerfiles.
+    Authenticate with DockerHub using provided credentials and ensure all images are built successfully.
+    
+    Steps to perform:
+    1. Login to DockerHub using environment credentials
+    2. Build Docker image for API service with tag {dockerhub_user}/k8s-api
+    3. Build Docker image for DB service with tag {dockerhub_user}/k8s-db
+    4. Build Docker image for App service with tag {dockerhub_user}/k8s-app
+    5. Verify all images are created successfully
+  
+  expected_output: >
+    Confirmation that all Docker images have been built successfully with proper tags.
+    The output should include:
+    - Success status for each service image build
+    - Image names and tags for all three services
+    - Build logs summary
+    - Verification that images exist locally
+  
+  agent: builder
+  callback: build_docker_images
+  dependencies: [scan_task]
 
-  - id: pusher
-    role: DockerHub Image Pusher
-    goal: Push Docker images to DockerHub
-    backstory: You handle DockerHub login, tagging, and secure pushing.
-    verbose: true
+push_task:
+  description: >
+    Push all built Docker images to DockerHub registry to make them available for deployment.
+    Ensure images are properly tagged and pushed with correct naming conventions.
+    
+    Steps to perform:
+    1. Push {dockerhub_user}/k8s-api image to DockerHub
+    2. Push {dockerhub_user}/k8s-db image to DockerHub
+    3. Push {dockerhub_user}/k8s-app image to DockerHub
+    4. Verify successful push for each image
+  
+  expected_output: >
+    Confirmation that all Docker images have been successfully pushed to DockerHub.
+    The output should include:
+    - Push status for each service image
+    - DockerHub repository URLs for all images
+    - Image digests and tags
+    - Verification that images are publicly accessible
+  
+  agent: pusher
+  callback: push_docker_images
+  dependencies: [build_task]
+
+compose_task:
+  description: >
+    Create a docker-compose.yml file and launch all services using Docker Compose.
+    Configure proper port mappings and service definitions for orchestrated deployment.
+    
+    Steps to perform:
+    1. Generate docker-compose.yml with all three services
+    2. Configure port mappings (5001, 5002, 5003 for api, db, app respectively)
+    3. Set proper image references to pushed DockerHub images
+    4. Launch all services using docker-compose up -d
+    5. Verify services are running successfully
+  
+  expected_output: >
+    Confirmation that all services are running successfully via Docker Compose.
+    The output should include:
+    - docker-compose.yml file creation confirmation
+    - Service startup logs
+    - Port mapping details
+    - Health check status for all services
+    - URLs where services can be accessed
+  
+  agent: composer
+  callback: launch_with_docker_compose
+  dependencies: [push_task]
